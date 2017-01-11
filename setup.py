@@ -15,7 +15,7 @@
 
 from setuptools import setup
 setup(
-    name="git-lfs-swift",
+    name="git-lfs-swift-server",
     version="0.1",
     packages=['git_lfs_swift_server'],
     install_requires=['Flask', 'python-swiftclient', 'pytz'],
