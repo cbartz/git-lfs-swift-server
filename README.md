@@ -46,13 +46,38 @@ For production, use the webserver of your choice.
 See the [Flask documentation](http://flask.pocoo.org/docs/latest/deploying/)
 for more information.
 
+## Usage
+The swift container and account used for storing the files will be determined
+by the client. GIT-LFS uses HTTP Basic authentication,
+and the username passed will be used to identify the account.
+So, its required to use the same username/password combination
+as when authenticating against the swift cluster. It is common to use the form _user:account_
+to authenticate against a swift cluster. This does not work well with HTTP Basic authentication,
+because the colon _:_ is already used as a delimiter. Therefore, replace _:_ by _;_ when
+authenticating against a git-lfs-swift server.
+
+The container is appended to the URL of the git-lfs-swift
+server. This has to be configured as follows (works with git-lfs version 1.5.3) : 
+
+If all the files should end up in a container
+called "mycontainer" and the domain of the git-lfs-swift server is _example.com_ use the command
+
+    git config lfs.url https://example.com/mycontainer
+
+Furthermore, set authentication to basic:
+
+    git config lfs.https://example.com/mycontainer/.access basic
+
+And use the batch API:
+
+    git config lfs.batch true
+
 ## Transfer types
 The git-lfs-swift server supports the required [basic](https://github.com/git-lfs/git-lfs/blob/master/docs/api/basic-transfers.md)
 transfer mode. But there is an issue with that: Swift clusters have a maximum object
-size (defaults to 5 GiB). Files larger then this size have to be splitted up into multiple segments. The basic
+size (defaults to 5 GiB). Files larger then this size have to be split up into multiple segments. The basic
 transfer mode does not support this mechanism. Therefore, the server supports the 
 [custom transfer mode](https://github.com/git-lfs/git-lfs/blob/master/docs/custom-transfers.md) *swift* , too.
-
 
 ## Keystone
 The server has been only tested with auth version 1.0 . It is possible to add additional kwargs to the
