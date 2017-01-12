@@ -77,7 +77,8 @@ The git-lfs-swift server supports the required [basic](https://github.com/git-lf
 transfer mode. But there is an issue with that: Swift clusters have a maximum object
 size (defaults to 5 GiB). Files larger then this size have to be split up into multiple segments. The basic
 transfer mode does not support this mechanism. Therefore, the server supports the 
-[custom transfer mode](https://github.com/git-lfs/git-lfs/blob/master/docs/custom-transfers.md) *swift* , too.
+[custom transfer mode](https://github.com/git-lfs/git-lfs/blob/master/docs/custom-transfers.md) called
+[swift](https://github.com/cbartz/git-lfs-swift-transfer-agent), too.
 
 ## Keystone
 The server has been only tested with auth version 1.0 . It is possible to add additional kwargs to the
