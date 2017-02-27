@@ -133,12 +133,19 @@ class BatchAPITestCase(unittest.TestCase):
                           data=json.dumps(data), headers=self.headers)
         self.assertEqual(500, r.status_code)
 
+        m.side_effect = [{'content-length': 1},
+                         ClientException('', http_status=403)]
+        r = self.app.post('/container/objects/batch',
+                          data=json.dumps(data), headers=self.headers)
+        self.assertEqual(403, r.status_code)
+
     @mock.patch('git_lfs_swift_server.server.client.head_object')
-    def test_upload(self, m):
+    @mock.patch('git_lfs_swift_server.server.client.post_object')
+    def test_upload(self, p_m, h_m):
         data = {'operation': 'upload', 'objects': self.objects}
 
-        m.side_effect = [ClientException('', http_status=404),
-                         ClientException('', http_status=404)]
+        h_m.side_effect = [ClientException('', http_status=404),
+                           ClientException('', http_status=404)]
         r = self.app.post('/container/objects/batch',
                           data=json.dumps(data), headers=self.headers)
         self.assertEqual(200, r.status_code)
@@ -149,7 +156,7 @@ class BatchAPITestCase(unittest.TestCase):
         self.assert_equal_object(r_data['objects'][0], self.o1)
         self.assert_equal_object(r_data['objects'][1], self.o2)
 
-        m.side_effect = [{}, ClientException('', http_status=404)]
+        h_m.side_effect = [{}, ClientException('', http_status=404)]
         r = self.app.post('/container/objects/batch',
                           data=json.dumps(data), headers=self.headers)
         self.assertEqual(200, r.status_code)
@@ -160,10 +167,30 @@ class BatchAPITestCase(unittest.TestCase):
                          {'oid': '1', 'size': 1, 'authenticated': True})
         self.assert_equal_object(r_data['objects'][1], self.o2)
 
-        m.side_effect = [{}, ClientException('', http_status=405)]
+        h_m.side_effect = [{}, ClientException('', http_status=405)]
         r = self.app.post('/container/objects/batch',
                           data=json.dumps(data), headers=self.headers)
         self.assertEqual(500, r.status_code)
+
+        h_m.side_effect = [ClientException('', http_status=404),
+                           ClientException('', http_status=403)]
+        p_m.side_effect = [ClientException('', http_status=404)]
+        r = self.app.post('/container/objects/batch',
+                          data=json.dumps(data), headers=self.headers)
+        self.assertEqual(200, r.status_code)
+        r_data = json.loads(r.data)
+        self.assertEqual(r_data.get('transfer'), 'basic')
+        self.assertEqual(len(r_data.get('objects')), 2)
+
+        self.assert_equal_object(r_data['objects'][0], self.o1)
+        self.assert_equal_object(r_data['objects'][1], self.o2)
+
+        h_m.side_effect = [ClientException('', http_status=404),
+                           ClientException('', http_status=403)]
+        p_m.side_effect = [ClientException('', http_status=403)]
+        r = self.app.post('/container/objects/batch',
+                          data=json.dumps(data), headers=self.headers)
+        self.assertEqual(403, r.status_code)
 
     @mock.patch('git_lfs_swift_server.server.client.head_object')
     def test_swift_transfer(self, m):

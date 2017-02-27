@@ -17,6 +17,8 @@ from datetime import datetime
 import json
 import logging
 import os
+import random
+import string
 import time
 
 import pytz
@@ -45,8 +47,79 @@ if app.config.get('LOGFILE') or app.config.get('LOGLEVEL'):
 logger = logging.getLogger(__name__)
 
 
+def handle_dl(
+        url, token, container, oid, o_size, o_data, expires_at, c_url,
+        href):
+    """Handle download of object by manipulating o_data dict."""
+    try:
+        meta = client.head_object(url, token, container, oid)
+
+        if int(meta['content-length']) != o_size:
+            o_data['error'] = dict(code=422,
+                                   message='Size does not match.')
+        else:
+            d_action = dict(href=href, header={'x-auth-token': token},
+                            expires_at=expires_at)
+            o_data['actions'] = {'download': d_action}
+    except ClientException as e:
+        if e.http_status == 404:
+            o_data['error'] = dict(code=404, message='Not found.')
+        elif e.http_status == 403:
+            abort(403)
+        else:
+            logger.exception(
+                'Failure while heading object with url %s. %s',
+                c_url + '/' + oid, str(e))
+            abort(500)
+
+
+def handle_ul(
+        url, token, container, oid, o_size, o_data, expires_at, c_url,
+        href):
+    """Handle upload of object by manipulating o_data dict."""
+    try:
+        client.head_object(url, token, container, oid)
+    except ClientException as e:
+        if e.http_status == 404:
+            pass
+        elif e.http_status == 403:
+            # It's possible that a write ACL exist. Test it with a
+            # post to a random object, which should not exist.
+            try:
+                chars = string.ascii_lowercase + string.digits
+                obj = '_'.join(random.choice(chars) for x in range(32))
+                client.post_object(url, token, container, obj, {})
+                # Landing here should be unlikely, but still
+                # this would mean that a write is possible.
+                pass
+            except ClientException as e:
+                if e.http_status == 404:
+                    # Post is possible, so user has access rights.
+                    pass
+                elif e.http_status == 403:
+                    abort(403)
+                else:
+                    logger.exception(
+                        'Failure while posting dummy object with url '
+                        '%s. %s',
+                        c_url + '/' + obj, str(e))
+                    abort(500)
+        else:
+            logger.exception(
+                'Failure while heading object with url %s. %s',
+                c_url + '/' + oid, str(e))
+            abort(500)
+
+        # Success. Write action object.
+        u_action = dict(href=href,
+                        header={'x-auth-token': token},
+                        expires_at=expires_at)
+        o_data['actions'] = {'upload': u_action}
+
+
+@app.route('/<account>/<container>/objects/batch', methods=['POST'])
 @app.route('/<container>/objects/batch', methods=['POST'])
-def batch_api(container):
+def batch_api(account=None, container=None):
     """
     Implementation of
     https://github.com/git-lfs/git-lfs/blob/master/docs/api/batch.md.
@@ -69,6 +142,10 @@ def batch_api(container):
         else:
             abort(500)
 
+    if account:
+        # Replace default storage-account.
+        url = '/'.join(url.rstrip('/').split('/')[0:-1] + [account])
+
     expires_in = app.config.get('TOKEN_EXPIRY', 3600)
     expires_at = datetime.fromtimestamp(int(time.time()) +
                                         expires_in, pytz.utc).isoformat()
@@ -89,6 +166,12 @@ def batch_api(container):
 
     c_url = url.rstrip('/') + '/' + container
     objs = []
+
+    if operation == 'download':
+        handle = handle_dl
+    else:
+        handle = handle_ul
+
     for o in data['objects']:
         try:
             oid = o['oid']
@@ -98,32 +181,9 @@ def batch_api(container):
 
         o_data = {'oid': oid}
         href = c_url if transfer == 'swift' else c_url + '/' + oid
-        try:
-            meta = client.head_object(url, token, container, oid)
-
-            if operation == 'download':
-                if int(meta['content-length']) != o_size:
-                    o_data['error'] = dict(code=422,
-                                           message='Size does not match.')
-                else:
-                    d_action = dict(href=href, header={'x-auth-token': token},
-                                    expires_at=expires_at)
-                    o_data['actions'] = {'download': d_action}
-        except ClientException as e:
-            if e.http_status == 404:
-                if operation == 'download':
-                    o_data['error'] = dict(code=404, message='Not found.')
-                else:
-                    u_action = dict(href=href,
-                                    header={'x-auth-token': token},
-                                    expires_at=expires_at)
-                    o_data['actions'] = {'upload': u_action}
-            else:
-                logger.exception(
-                    'Failure while heading object with url %s. %s',
-                    c_url + '/' + oid, str(e))
-                abort(500)
-
+        handle(
+            url, token, container, oid, o_size, o_data, expires_at, c_url,
+            href)
         o_data['size'] = o_size
         o_data['authenticated'] = True
         objs.append(o_data)

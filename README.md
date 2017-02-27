@@ -49,28 +49,27 @@ for more information.
 ## Usage
 The swift container and account used for storing the files will be determined
 by the client. GIT-LFS uses HTTP Basic authentication,
-and the username passed will be used to identify the account.
-So, its required to use the same username/password combination
+and its required to use the same username/password combination
 as when authenticating against the swift cluster. It is common to use the form _user:account_
 to authenticate against a swift cluster. This does not work well with HTTP Basic authentication,
 because the colon _:_ is already used as a delimiter. Therefore, replace _:_ by _;_ when
 authenticating against a git-lfs-swift server.
 
-The container is appended to the URL of the git-lfs-swift
-server. This has to be configured as follows (works with git-lfs version 1.5.3) : 
+The server needs to know which swift account and container to use for storing/retrieving the data.
+It is possible to skip the account part; in this case the account is automatically retrieved by the username
+(Technically: The storage url the auth middleware is returning is used).
+This works well if the user is accessing a space which belongs to his own. If an account of another space
+shall be accessed (e.g. using the [ACL](https://docs.openstack.org/developer/swift/overview_acl.html) mechanism), it must be specified
+explicitly. Configuration on the client side is done as follows (tested with git-lfs version 1.5.3) :
 
 If all the files should end up in a container
-called "mycontainer" and the domain of the git-lfs-swift server is _example.com_ use the command
+called _mycontainer_ and the domain of the git-lfs-swift server is _example.com_ use the command
 
     git config lfs.url https://example.com/mycontainer
 
-Furthermore, set authentication to basic:
+If _mycontainer_ lies within a different account, specify it before the container part:
 
-    git config lfs.https://example.com/mycontainer/.access basic
-
-And use the batch API:
-
-    git config lfs.batch true
+    git config lfs.url https://example.com/AUTH_otheraccount/mycontainer
 
 ## Transfer types
 The git-lfs-swift server supports the required [basic](https://github.com/git-lfs/git-lfs/blob/master/docs/api/basic-transfers.md)
