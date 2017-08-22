@@ -22,6 +22,7 @@ import string
 import time
 
 import pytz
+import requests
 from swiftclient import client
 from swiftclient.exceptions import ClientException
 
@@ -31,6 +32,8 @@ app = Flask(__name__)
 app.config.from_envvar('GIT_LFS_SWIFT_SETTINGS_FILE', silent=True)
 if 'GIT_LFS_SWIFT_AUTH_URL' in os.environ:
     app.config['AUTH_URL'] = os.environ['GIT_LFS_SWIFT_AUTH_URL']
+if 'GIT_LFS_SWIFT_BASE_URL' in os.environ:
+    app.config['BASE_URL'] = os.environ['GIT_LFS_SWIFT_BASE_URL']
 if 'GIT_LFS_SWIFT_TOKEN_EXPIRY' in os.environ:
     app.config['TOKEN_EXPIRY'] = os.environ['GIT_LFS_SWIFT_TOKEN_EXPIRY']
 if 'GIT_LFS_SWIFT_LOGFILE' in os.environ:
@@ -47,108 +50,127 @@ if app.config.get('LOGFILE') or app.config.get('LOGLEVEL'):
 logger = logging.getLogger(__name__)
 
 
-def handle_dl(
-        url, token, container, oid, o_size, o_data, expires_at, c_url,
-        href):
+def handle_dl(c_url, oid, query, headers, o_size, o_data):
     """Handle download of object by manipulating o_data dict."""
+    url = c_url + '/' + oid + query
+    success = False
+    r = requests.head(url, headers=headers)
     try:
-        meta = client.head_object(url, token, container, oid)
-
-        if int(meta['content-length']) != o_size:
-            o_data['error'] = dict(code=422,
-                                   message='Size does not match.')
-        else:
-            d_action = dict(href=href, header={'x-auth-token': token},
-                            expires_at=expires_at)
-            o_data['actions'] = {'download': d_action}
-    except ClientException as e:
-        if e.http_status == 404:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        if r.status_code == 404:
             o_data['error'] = dict(code=404, message='Not found.')
-        elif e.http_status == 403:
-            abort(403)
+        elif r.status_code in (401, 403):
+            abort(r.status_code)
         else:
             logger.exception(
                 'Failure while heading object with url %s. %s',
-                c_url + '/' + oid, str(e))
+                url, str(e))
             abort(500)
+    else:
+        if int(r.headers['content-length']) != o_size:
+            o_data['error'] = dict(
+                code=422, message='Size does not match.')
+        else:
+            success = True
+
+    return success
 
 
 def handle_ul(
-        url, token, container, oid, o_size, o_data, expires_at, c_url,
-        href):
+        c_url, oid, query, headers, o_size, o_data):
     """Handle upload of object by manipulating o_data dict."""
+    url = c_url + '/' + oid + query
+    r = requests.head(url, headers=headers)
     try:
-        client.head_object(url, token, container, oid)
-    except ClientException as e:
-        if e.http_status == 404:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        if r.status_code == 404:
             pass
-        elif e.http_status == 403:
+        elif r.status_code == 401:
+            abort(401)
+        elif r.status_code == 403:
             # It's possible that a write ACL exist. Test it with a
             # post to a random object, which should not exist.
+            chars = string.ascii_lowercase + string.digits
+            obj = '_'.join(random.choice(chars) for x in range(32))
+            url = c_url + '/' + obj
+            r = requests.post(url, headers=headers)
             try:
-                chars = string.ascii_lowercase + string.digits
-                obj = '_'.join(random.choice(chars) for x in range(32))
-                client.post_object(url, token, container, obj, {})
+                r.raise_for_status()
                 # Landing here should be unlikely, but still
                 # this would mean that a write is possible.
                 pass
-            except ClientException as e:
-                if e.http_status == 404:
+            except requests.RequestException as e:
+                if r.status_code == 404:
                     # Post is possible, so user has access rights.
                     pass
-                elif e.http_status == 403:
+                elif r.status_code == 403:
                     abort(403)
                 else:
                     logger.exception(
                         'Failure while posting dummy object with url '
                         '%s. %s',
-                        c_url + '/' + obj, str(e))
+                        url, str(e))
                     abort(500)
         else:
             logger.exception(
                 'Failure while heading object with url %s. %s',
-                c_url + '/' + oid, str(e))
+                url, str(e))
             abort(500)
 
-        # Success. Write action object.
-        u_action = dict(href=href,
-                        header={'x-auth-token': token},
-                        expires_at=expires_at)
-        o_data['actions'] = {'upload': u_action}
+        return True
 
 
+@app.route(
+    '/<account>/<container>/read_<readsig>/write_<writesig>/<expires_at>/'
+    'objects/batch', methods=['POST'])
 @app.route('/<account>/<container>/objects/batch', methods=['POST'])
 @app.route('/<container>/objects/batch', methods=['POST'])
-def batch_api(account=None, container=None):
+def batch_api(
+        account=None, container=None, readsig=None, writesig=None,
+        expires_at=None):
     """
     Implementation of
     https://github.com/git-lfs/git-lfs/blob/master/docs/api/batch.md.
     """
     auth = request.authorization
-    if not auth:
-        abort(401)
-    try:
+
+    if auth:
         # With this option it should be possible
         # to use keystone auth, too.
         kwargs = app.config.get('AUTH_KWARGS', {})
-
-        url, token = client.get_auth(app.config['AUTH_URL'],
-                                     auth.username.replace(';', ':'),
-                                     auth.password,
-                                     **kwargs)
-    except ClientException as e:
-        if e.http_status == 401:
-            abort(401)
+        try:
+            storage_url, token = client.get_auth(
+                app.config['AUTH_URL'],
+                auth.username.replace(';', ':'),
+                auth.password,
+                **kwargs)
+        except ClientException as e:
+            if e.http_status == 401:
+                abort(401)
+            else:
+                abort(500)
         else:
-            abort(500)
+            query = ''
+            if account:
+                # Replace default storage-account.
+                storage_url = '/'.join(
+                    storage_url.rstrip('/').split('/')[0:-1] + [account])
+    else:
+        token = None
+        if 'BASE_URL' not in app.config or account is None:
+            abort(401)
 
-    if account:
-        # Replace default storage-account.
-        url = '/'.join(url.rstrip('/').split('/')[0:-1] + [account])
+        storage_url = app.config['BASE_URL'].rstrip('/') + '/v1/' + account
 
-    expires_in = app.config.get('TOKEN_EXPIRY', 3600)
-    expires_at = datetime.fromtimestamp(int(time.time()) +
-                                        expires_in, pytz.utc).isoformat()
+    if not expires_at:
+        expires_at_iso = datetime.fromtimestamp(
+            int(time.time()) + app.config.get('TOKEN_EXPIRY', 3600),
+            pytz.utc).isoformat()
+    else:
+        expires_at_iso = datetime.fromtimestamp(
+            int(expires_at), pytz.utc).isoformat()
 
     data = request.get_json()
     logger.debug('Received Data: %s', data)
@@ -159,18 +181,25 @@ def batch_api(account=None, container=None):
 
     # We currently support basic and swift transfer.
     # With swift transfer, the client does also consider LO's.
-    if 'swift' in data.get('transfers', []):
+    # swift transfer currently only supports token auth.
+    if 'swift' in data.get('transfers', []) and token:
         transfer = 'swift'
     else:
         transfer = 'basic'
 
-    c_url = url.rstrip('/') + '/' + container
+    c_url = storage_url.rstrip('/') + '/' + container
     objs = []
 
     if operation == 'download':
         handle = handle_dl
+        if not auth:
+            query = '?temp_url_prefix=&temp_url_sig={}&temp_url_expires={}'.\
+                format(readsig, expires_at)
     else:
         handle = handle_ul
+        if not auth:
+            query = '?temp_url_prefix=&temp_url_sig={}&temp_url_expires={}'.\
+                format(writesig, expires_at)
 
     for o in data['objects']:
         try:
@@ -180,10 +209,14 @@ def batch_api(account=None, container=None):
             abort(400)
 
         o_data = {'oid': oid}
-        href = c_url if transfer == 'swift' else c_url + '/' + oid
-        handle(
-            url, token, container, oid, o_size, o_data, expires_at, c_url,
-            href)
+        href = c_url if transfer == 'swift' else c_url + '/' + oid + query
+        headers = {'x-auth-token': token} if token else {}
+
+        if handle(c_url, oid, query, headers, o_size, o_data):
+            action = dict(
+                href=href, header=headers, expires_at=expires_at_iso)
+            o_data['actions'] = {operation: action}
+
         o_data['size'] = o_size
         o_data['authenticated'] = True
         objs.append(o_data)
@@ -195,6 +228,6 @@ def batch_api(account=None, container=None):
 
 
 if __name__ == "__main__":
-    if 'AUTH_URL' not in app.config:
-        raise Exception('AUTH_URL must be specified.')
+    if 'AUTH_URL' not in app.config and 'BASE_URL' not in app.config:
+        raise Exception('AUTH_URL or BASE_URL must be specified.')
     app.run()

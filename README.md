@@ -20,7 +20,8 @@ cluster to store the data. This server implements the
 ## Configuration
 In a python file:
 
-    AUTH_URL = "https://example.com/auth/v1.0"
+    AUTH_URL = "https://example.com/auth/v1.0" # Required for token Auth
+    BASE_URL = "https://example.com" # Required for tempURL Auth
     TOKEN_EXPIRY = 3600
     LOGFILE = /tmp/logfile
     LOGLEVEL = INFO
@@ -51,25 +52,45 @@ The swift container and account used for storing the files will be determined
 by the client. GIT-LFS uses HTTP Basic authentication,
 and its required to use the same username/password combination
 as when authenticating against the swift cluster. It is common to use the form _user:account_
-to authenticate against a swift cluster. This does not work well with HTTP Basic authentication,
+as username to authenticate against a swift cluster.
+This does not work well with HTTP Basic authentication,
 because the colon _:_ is already used as a delimiter. Therefore, replace _:_ by _;_ when
 authenticating against a git-lfs-swift server.
 
-The server needs to know which swift account and container to use for storing/retrieving the data.
-It is possible to skip the account part; in this case the account is automatically retrieved by the username
-(Technically: The storage url the auth middleware is returning is used).
-This works well if the user is accessing a space which belongs to his own. If an account of another space
-shall be accessed (e.g. using the [ACL](https://docs.openstack.org/developer/swift/overview_acl.html) mechanism), it must be specified
-explicitly. Configuration on the client side is done as follows (tested with git-lfs version 1.5.3) :
+The swift account is automatically retrieved by the username 
+(technically: The storage url the auth middleware is returning is used),
+if the account is not specified explicitly in the LFS Server URL. Specifying
+the account explicitly makes sense if the user is accessing a space which
+does not belong to his own 
+(e.g. using the [ACL](https://docs.openstack.org/developer/swift/overview_acl.html)
+mechanism).
 
-If all the files should end up in a container
-called _mycontainer_ and the domain of the git-lfs-swift server is _example.com_ use the command
+Beyond that, it is possible to use [prefix-based temporary URLs](https://docs.openstack.org/swift/latest/api/temporary_url_middleware.html)
+with an empty prefix (thus valid for a whole container).
+They have the advantage that people without credentials for the swift cluster can access the 
+LFS objects. In this case, no username and password is required and HTTP Basic auth
+can be disabled in the LFS config file. Authentication with temporary URLs require
+that the variable _BASE_URL_ is defined in the server config file.
+
+In summary, there are three kinds of a URL:
+
+    <host>/<container>
+    <host>/<account>/<container>
+    <host>/<account>/<container>/read_<readsig>/write_<writesig>/<expires_at>
+
+Example: If all the files should end up in a container
+called _mycontainer_ and the domain of the git-lfs-swift server is _example.com_ 
+use following command to setup the LFS URL:
 
     git config lfs.url https://example.com/mycontainer
 
 If _mycontainer_ lies within a different account, specify it before the container part:
 
     git config lfs.url https://example.com/AUTH_otheraccount/mycontainer
+
+And, if a prefix-based temporary URL is used, the command could look like:
+
+    git config lfs.url https://example.com/AUTH_account/mycontainer/read_eb1566dd06c757566a46f46134404b6a047913e1/write_45e76be84e45ed9f0c08b5ed63bde3ea64f41100/1503915711/
 
 ## Transfer types
 The git-lfs-swift server supports the required [basic](https://github.com/git-lfs/git-lfs/blob/master/docs/api/basic-transfers.md)
@@ -78,6 +99,7 @@ size (defaults to 5 GiB). Files larger then this size have to be split up into m
 transfer mode does not support this mechanism. Therefore, the server supports the 
 [custom transfer mode](https://github.com/git-lfs/git-lfs/blob/master/docs/custom-transfers.md) called
 [swift](https://github.com/cbartz/git-lfs-swift-transfer-agent), too.
+This mode is currently not compatible with prefix-based temporary URL authentication.
 
 ## Keystone
 The server has been only tested with auth version 1.0 . It is possible to add additional kwargs to the

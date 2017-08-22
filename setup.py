@@ -18,7 +18,7 @@ setup(
     name="git-lfs-swift-server",
     version="0.1",
     packages=['git_lfs_swift_server'],
-    install_requires=['Flask', 'python-swiftclient', 'pytz'],
+    install_requires=['Flask', 'python-swiftclient', 'pytz', 'requests'],
     tests_require='mock',
     author="Christopher Bartz",
     author_email="bartz@dkrz.de",
